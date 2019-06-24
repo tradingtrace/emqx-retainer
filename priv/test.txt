@@ -1,0 +1,109 @@
+%% 100K
+
+(emqx@127.0.0.1)192> emqx_retainer:prepare_test(100000).
+2019-06-24 20:49:52.068 [error] dirty_write retainer create, time: 998131, random: 100469
+2019-06-24 20:49:52.517 [error] dirty_write retainer update, time: 449065, count: 100000
+2019-06-24 20:52:33.206 [error] dirty_write trie create, time: 160688799, count: 100000
+2019-06-24 20:52:33.738 [error] dirty_write trie update, time: 531774, count: 100000
+2019-06-24 20:52:33.738 [error] emqx_retainer, size: 100000, memory: 5084200
+2019-06-24 20:52:33.738 [error] emqx_retainer_trie_node, size: 163408, memory: 6779323
+2019-06-24 20:52:33.738 [error] emqx_retainer_trie_edge, size: 163407, memory: 3396442
+ok
+(emqx@127.0.0.1)193> emqx_retainer:test_match().
+2019-06-24 20:53:06.861 [error] ---- <<"channel/room_type_5/room_id_9544/#">> ----
+2019-06-24 20:53:06.861 [error] foldl matching, ms: 454, time: 454394, topics: 1
+2019-06-24 20:53:06.862 [error] select matching, ms: 124, time: 123277, topics: 1
+2019-06-24 20:53:06.862 [error] trie matching, ms: 4, time: 4517, topics: 1
+2019-06-24 20:53:06.862 [error]
+2019-06-24 20:53:07.809 [error] ---- <<"channel/+/+/measure_76">> ----
+2019-06-24 20:53:07.809 [error] foldl matching, ms: 609, time: 608534, topics: 999
+2019-06-24 20:53:07.809 [error] select matching, ms: 119, time: 119266, topics: 999
+2019-06-24 20:53:07.810 [error] trie matching, ms: 219, time: 219358, topics: 999
+2019-06-24 20:53:07.810 [error]
+2019-06-24 20:53:08.704 [error] ---- <<"channel/room_type_5/#">> ----
+2019-06-24 20:53:08.704 [error] foldl matching, ms: 705, time: 705311, topics: 10165
+2019-06-24 20:53:08.704 [error] select matching, ms: 129, time: 129269, topics: 10165
+2019-06-24 20:53:08.704 [error] trie matching, ms: 60, time: 59454, topics: 10165
+2019-06-24 20:53:08.704 [error]
+2019-06-24 20:53:10.875 [error] ---- <<"channel/#">> ----
+2019-06-24 20:53:10.875 [error] foldl matching, ms: 1197, time: 1197094, topics: 99997
+2019-06-24 20:53:10.875 [error] select matching, ms: 322, time: 322471, topics: 99997
+2019-06-24 20:53:10.875 [error] trie matching, ms: 651, time: 650707, topics: 99997
+2019-06-24 20:53:10.875 [error]
+2019-06-24 20:53:12.805 [error] ---- <<"#">> ----
+2019-06-24 20:53:12.805 [error] foldl matching, ms: 1025, time: 1025498, topics: 99997
+2019-06-24 20:53:12.806 [error] select matching, ms: 264, time: 263511, topics: 99997
+2019-06-24 20:53:12.806 [error] trie matching, ms: 640, time: 640478, topics: 100000
+2019-06-24 20:53:12.806 [error]
+2019-06-24 20:53:13.350 [error] ---- <<"+">> ----
+2019-06-24 20:53:13.350 [error] foldl matching, ms: 436, time: 436007, topics: 0
+2019-06-24 20:53:13.350 [error] select matching, ms: 108, time: 108048, topics: 0
+2019-06-24 20:53:13.351 [error] trie matching, ms: 0, time: 26, topics: 0
+2019-06-24 20:53:13.351 [error]
+2019-06-24 20:53:13.942 [error] ---- <<"+/+">> ----
+2019-06-24 20:53:13.942 [error] foldl matching, ms: 478, time: 477846, topics: 0
+2019-06-24 20:53:13.942 [error] select matching, ms: 113, time: 113188, topics: 0
+2019-06-24 20:53:13.942 [error] trie matching, ms: 0, time: 57, topics: 1
+2019-06-24 20:53:13.942 [error]
+2019-06-24 20:53:14.530 [error] ---- <<"$SYS/#">> ----
+2019-06-24 20:53:14.530 [error] foldl matching, ms: 465, time: 464944, topics: 3
+2019-06-24 20:53:14.530 [error] select matching, ms: 123, time: 122244, topics: 0
+2019-06-24 20:53:14.530 [error] trie matching, ms: 0, time: 53, topics: 3
+2019-06-24 20:53:14.530 [error]
+ok
+
+----------------------------------------------------------------------------------------------------------------------
+%% 500K
+
+(emqx@127.0.0.1)172> emqx_retainer:prepare_test(500000).
+2019-06-24 19:50:43.485 [error] dirty_write retainer create, time: 11110249, random: 512949
+2019-06-24 20:20:35.520 [error] dirty_write retainer update, time: 10343324, count: 500000
+2019-06-24 20:20:35.521 [error] dirty_write trie create, time: 1774255361, count: 500000
+2019-06-24 20:20:35.521 [error] dirty_write trie update, time: 7429711, count: 500000
+2019-06-24 20:45:03.964 [error] emqx_retainer, size: 500000, memory: 25414184
+2019-06-24 20:45:03.964 [error] emqx_retainer_trie_node, size: 599409, memory: 30189099
+2019-06-24 20:45:03.964 [error] emqx_retainer_trie_edge, size: 599408, memory: 12521915
+ok
+
+(emqx@127.0.0.1)177> emqx_retainer:test_match().
+2019-06-24 20:30:21.931 [error] ---- <<"channel/room_type_1/room_id_6333/#">> ----
+2019-06-24 20:30:21.932 [error] foldl matching, ms: 3075, time: 3074843, topics: 2
+2019-06-24 20:30:21.932 [error] select matching, ms: 695, time: 694888, topics: 2
+2019-06-24 20:30:21.932 [error] trie matching, ms: 7, time: 7245, topics: 2
+2019-06-24 20:30:21.932 [error]
+2019-06-24 20:30:26.994 [error] ---- <<"channel/+/+/measure_20">> ----
+2019-06-24 20:30:26.994 [error] foldl matching, ms: 3762, time: 3762092, topics: 4926
+2019-06-24 20:30:26.994 [error] select matching, ms: 700, time: 699473, topics: 4926
+2019-06-24 20:30:26.994 [error] trie matching, ms: 600, time: 600266, topics: 4926
+2019-06-24 20:30:26.994 [error]
+2019-06-24 20:30:32.583 [error] ---- <<"channel/room_type_1/#">> ----
+2019-06-24 20:30:32.583 [error] foldl matching, ms: 4591, time: 4591181, topics: 50170
+2019-06-24 20:30:32.583 [error] select matching, ms: 724, time: 723068, topics: 50170
+2019-06-24 20:30:32.583 [error] trie matching, ms: 274, time: 274411, topics: 50170
+2019-06-24 20:30:32.584 [error]
+2019-06-24 20:30:45.181 [error] ---- <<"channel/#">> ----
+2019-06-24 20:30:45.182 [error] foldl matching, ms: 7666, time: 7666708, topics: 499997
+2019-06-24 20:30:45.182 [error] select matching, ms: 1136, time: 1135125, topics: 499997
+2019-06-24 20:30:45.182 [error] trie matching, ms: 3795, time: 3795808, topics: 499997
+2019-06-24 20:30:45.182 [error]
+2019-06-24 20:30:54.628 [error] ---- <<"#">> ----
+2019-06-24 20:30:54.628 [error] foldl matching, ms: 5582, time: 5581660, topics: 499997
+2019-06-24 20:30:54.628 [error] select matching, ms: 1249, time: 1248936, topics: 499997
+2019-06-24 20:30:54.628 [error] trie matching, ms: 2615, time: 2615258, topics: 500000
+2019-06-24 20:30:54.628 [error]
+2019-06-24 20:30:57.949 [error] ---- <<"+">> ----
+2019-06-24 20:30:57.950 [error] foldl matching, ms: 2692, time: 2692616, topics: 0
+2019-06-24 20:30:57.950 [error] select matching, ms: 628, time: 628211, topics: 0
+2019-06-24 20:30:57.950 [error] trie matching, ms: 0, time: 29, topics: 0
+2019-06-24 20:30:57.950 [error]
+2019-06-24 20:31:01.226 [error] ---- <<"+/+">> ----
+2019-06-24 20:31:01.226 [error] foldl matching, ms: 2641, time: 2641019, topics: 0
+2019-06-24 20:31:01.226 [error] select matching, ms: 635, time: 634901, topics: 0
+2019-06-24 20:31:01.226 [error] trie matching, ms: 0, time: 48, topics: 1
+2019-06-24 20:31:01.227 [error]
+2019-06-24 20:31:04.581 [error] ---- <<"$SYS/#">> ----
+2019-06-24 20:31:04.581 [error] foldl matching, ms: 2687, time: 2687587, topics: 3
+2019-06-24 20:31:04.581 [error] select matching, ms: 667, time: 666366, topics: 0
+2019-06-24 20:31:04.581 [error] trie matching, ms: 0, time: 45, topics: 3
+2019-06-24 20:31:04.581 [error]
+ok

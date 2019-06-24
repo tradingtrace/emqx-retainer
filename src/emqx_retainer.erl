@@ -48,6 +48,7 @@
         , match_messages3/1
         , match_delete_messages2/1
         , prepare_test/1
+        , table_size_memory/0
         , test_match/1
         , test_match/0
         , test_delete/0
@@ -496,11 +497,24 @@ prepare_test(N) ->
     mnesia:clear_table(emqx_retainer_trie_edge),
     random_and_write(N),
     {T1, C1} = timer:tc(fun() -> write_to_retainer(ets:first(?TAB), 0) end),
-    {T2, C2} = timer:tc(fun() -> write_to_trie(ets:first(?TAB), 0) end),
-    {T3, C3} = timer:tc(fun() -> write_to_trie(ets:first(?TAB), 0) end),
     ?LOG(error, "dirty_write retainer update, time: ~w, count: ~w~n", [T1, C1]),
+    {T2, C2} = timer:tc(fun() -> write_to_trie(ets:first(?TAB), 0) end),
     ?LOG(error, "dirty_write trie create, time: ~w, count: ~w~n", [T2, C2]),
-    ?LOG(error, "dirty_write trie update, time: ~w, count: ~w~n", [T3, C3]).
+    {T3, C3} = timer:tc(fun() -> write_to_trie(ets:first(?TAB), 0) end),
+    ?LOG(error, "dirty_write trie update, time: ~w, count: ~w~n", [T3, C3]),
+    table_size_memory(),
+    ok.
+
+table_size_memory() ->
+    M1 = mnesia:table_info(emqx_retainer, memory),
+    M2 = mnesia:table_info(emqx_retainer_trie_node, memory),
+    M3 = mnesia:table_info(emqx_retainer_trie_edge, memory),
+    S1 = mnesia:table_info(emqx_retainer, size),
+    S2 = mnesia:table_info(emqx_retainer_trie_node, size),
+    S3 = mnesia:table_info(emqx_retainer_trie_edge, size),
+    ?LOG(error, "emqx_retainer, size: ~w, memory: ~w~n", [S1, M1]),
+    ?LOG(error, "emqx_retainer_trie_node, size: ~w, memory: ~w~n", [S2, M2]),
+    ?LOG(error, "emqx_retainer_trie_edge, size: ~w, memory: ~w~n", [S3, M3]).
 
 test_match() ->
     Topic = ets:first(?TAB),
@@ -543,14 +557,19 @@ test_match() ->
     test_match(Topic5),
     test_match(Topic6),
     ok.
+
 test_match(Filter) ->
+    Ms = emqx_time:now_ms(),
     {T1, L1} = timer:tc(fun() -> length(match_messages(Filter)) end),
+    Ms1 = emqx_time:now_ms(),
     {T2, L2} = timer:tc(fun() -> length(match_messages_select(Filter)) end),
+    Ms2 = emqx_time:now_ms(),
     {T3, L3} = timer:tc(fun() -> length(match_messages_trie(Filter)) end),
+    Ms3 = emqx_time:now_ms(),
     ?LOG(error, "---- ~p ----~n", [Filter]),
-    ?LOG(error, "foldl matching, time: ~w, topics: ~w~n", [T1, L1]),
-    ?LOG(error, "select matching, time: ~w, topics: ~w~n", [T2, L2]),
-    ?LOG(error, "trie matching, time: ~w, topics: ~w~n", [T3, L3]),
+    ?LOG(error, "foldl matching, ms: ~w, time: ~w, topics: ~w~n", [Ms1 - Ms, T1, L1]),
+    ?LOG(error, "select matching, ms: ~w, time: ~w, topics: ~w~n", [Ms2 - Ms1, T2, L2]),
+    ?LOG(error, "trie matching, ms: ~w, time: ~w, topics: ~w~n", [Ms3 - Ms2, T3, L3]),
     ?LOG(error, "~n~n").
 
 test_delete() ->
