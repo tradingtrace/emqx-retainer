@@ -42,6 +42,19 @@
         , code_change/3
         ]).
 
+-export([ random_words/2
+        , match_messages_select/1
+        , match_messages_trie/1
+        , match_messages3/1
+        , match_delete_messages2/1
+        , prepare_test/1
+        , test_match/1
+        , test_match/0
+        , test_delete/0
+        , write_to_retainer/2
+        , write_to_trie/2
+        ]).
+
 -record(state, {stats_fun, stats_timer, expiry_timer}).
 
 %%------------------------------------------------------------------------------
@@ -78,8 +91,6 @@ on_message_publish(Msg = #message{flags = #{retain := true}}, Env) ->
 on_message_publish(Msg, _Env) ->
     {ok, Msg}.
 
-sort_retained([])    -> [];
-sort_retained([Msg]) -> [Msg];
 sort_retained(Msgs)  ->
     lists:sort(fun(#message{timestamp = Ts1}, #message{timestamp = Ts2}) ->
                    Ts1 =< Ts2
@@ -247,10 +258,14 @@ match_messages(Filter) ->
                 end
             end,
     {Unexpired, Expired} = mnesia:async_dirty(fun mnesia:foldl/3, [Fun, {[], []}, ?TAB]),
-    mnesia:transaction(
-        fun() ->
-            lists:foreach(fun(Msg) -> mnesia:delete({?TAB, Msg#message.topic}) end, Expired)
-        end),
+%%    ?LOG(error, "Unexpired: ~w, Expired: ~w~n", [length(Unexpired), length(Expired)]),
+    %% Assume a topic A, A is expired when doing foldl, but updated to unexpired before transaction and after foldl
+    %% It will be deleted in the below transaction.
+    %% What about only delete expired messages in the `expire` timer, not here?
+%%    mnesia:transaction(
+%%        fun() ->
+%%            lists:foreach(fun(Msg) -> mnesia:delete({?TAB, Msg#message.topic}) end, Expired)
+%%        end),
     Unexpired.
 
 -spec(match_delete_messages(binary()) -> integer()).
@@ -286,3 +301,271 @@ expire_messages() ->
 -spec(retained_count() -> non_neg_integer()).
 retained_count() -> mnesia:table_info(?TAB, size).
 
+%%------------------------------------------------------------------------------
+%% test
+%%------------------------------------------------------------------------------
+store_retained_trie(Msg = #message{topic = Topic, payload = Payload, timestamp = Ts}, Env) ->
+    case {is_table_full(Env), is_too_big(size(Payload), Env)} of
+        {false, false} ->
+            ok = emqx_metrics:set('messages.retained', retained_count()),
+            ExpiryTime = case Msg of
+                             #message{topic = <<"$SYS/", _/binary>>} -> 0;
+                             #message{headers = #{'Message-Expiry-Interval' := Interval}, timestamp = Ts} when Interval =/= 0 ->
+                                 emqx_time:now_ms(Ts) + Interval * 1000;
+                             #message{timestamp = Ts} ->
+                                 case proplists:get_value(expiry_interval, Env, 0) of
+                                     0 -> 0;
+                                     Interval -> emqx_time:now_ms(Ts) + Interval
+                                 end
+                         end,
+            emqx_retainer_trie:insert(Topic, Msg, ExpiryTime);
+        {true, _} ->
+            ?LOG(error, "[Retainer] Cannot retain message(topic=~s) for table is full!", [Topic]);
+        {_, true}->
+            ?LOG(error, "[Retainer] Cannot retain message(topic=~s, payload_size=~p) "
+                        "for payload is too big!", [Topic, iolist_size(Payload)])
+    end.
+
+match_messages_trie(Filter) ->
+    Now = emqx_time:now_ms(),
+    case emqx_topic:wildcard(Filter) of
+        true ->
+            mnesia:async_dirty(fun() ->
+                                    case catch emqx_retainer_trie:match(Filter, Now) of
+                                        Msgs when is_list(Msgs) ->
+                                            Msgs;
+                                        Error ->
+                                            ?LOG(error, "trie match error: ~w~n", [Error]),
+                                            ?LOG(error, "trie match backtrace: ~w~n", [erlang:get_stacktrace()])
+                                    end
+                               end);
+        false ->
+            mnesia:async_dirty(fun() -> emqx_retainer_trie:lookup(Filter) end)
+    end.
+
+store_retained2(Msg = #message{topic = Topic, payload = Payload, timestamp = Ts}, Env) ->
+    case {is_table_full(Env), is_too_big(size(Payload), Env)} of
+        {false, false} ->
+            ok = emqx_metrics:set('messages.retained', retained_count()),
+            ExpiryTime = case Msg of
+                #message{topic = <<"$SYS/", _/binary>>} -> 0;
+                #message{headers = #{'Message-Expiry-Interval' := Interval}, timestamp = Ts} when Interval =/= 0 ->
+                    emqx_time:now_ms(Ts) + Interval * 1000;
+                #message{timestamp = Ts} ->
+                    case proplists:get_value(expiry_interval, Env, 0) of
+                        0 -> 0;
+                        Interval -> emqx_time:now_ms(Ts) + Interval
+                    end
+            end,
+            Words = list_to_tuple(emqx_topic:words(Topic)),
+            mnesia:dirty_write(?TAB, #retained{topic = Topic, msg = Msg, expiry_time = ExpiryTime,
+                                               words = Words, level = erlang:size(Words)});
+        {true, _} ->
+            ?LOG(error, "[Retainer] Cannot retain message(topic=~s) for table is full!", [Topic]);
+        {_, true}->
+            ?LOG(error, "[Retainer] Cannot retain message(topic=~s, payload_size=~p) "
+                              "for payload is too big!", [Topic, iolist_size(Payload)])
+    end.
+
+-spec(match_messages_select(binary()) -> [emqx_types:message()]).
+match_messages_select(Filter) ->
+    MatchExpression = match_expression(Filter, message),
+    mnesia:async_dirty(fun mnesia:select/2, [?TAB, MatchExpression]).
+
+-spec(match_expression(binary(), message | topic) -> [tuple()]).
+match_expression(Filter, Result) ->
+    MatchHead = #retained{topic = '$1', msg = '$2', expiry_time = '$3', words = '$4', level = '$5'},
+    Words = emqx_topic:words(Filter),
+    Level = erlang:length(Words),
+    ExpiryConditions = [{'orelse', {'>=', '$3', emqx_time:now_ms()}, {'=:=', '$3', 0}}],
+    {WordsConditions, _} = lists:foldl(fun
+                                           ('+', {WCs, N}) -> {WCs, N + 1};
+                                           ('#', {WCs, N}) -> {WCs, N + 1};
+                                           (W, {WCs, N})  ->
+                                               {[{'=:=', W, {element, N, '$4'}}|WCs], N+1}
+                                       end, {[], 1}, Words),
+    SysConditions = [{'=/=', <<"$SYS">>, {element, 1, '$4'}}],
+    LevelConditions = case lists:last(Words) of
+                          '#' -> [{'>=', '$5', Level - 1}];
+                          _ -> [{'=:=', '$5', Level}]
+                      end,
+    MatchConditions = lists:flatten([LevelConditions, ExpiryConditions, SysConditions, WordsConditions]),
+    MatchBody = case Result of
+                    message -> ['$2'];
+                    _ -> ['$1']
+                end,
+    [{MatchHead, MatchConditions, MatchBody}].
+
+-spec(match_messages3(binary()) -> [emqx_types:message()]).
+match_messages3(Filter) ->
+    %% TODO: optimize later...
+    Fun = fun
+              (#retained{topic = Name, msg = Msg, expiry_time = ExpiryTime}, Unexpired) ->
+                  case emqx_topic:match(Name, Filter) of
+                      true ->
+                          case ExpiryTime =/= 0 andalso emqx_time:now_ms() >= ExpiryTime of
+                              true -> Unexpired;
+                              false ->
+                                  [Msg | Unexpired]
+                          end;
+                      false -> Unexpired
+                  end
+          end,
+     mnesia:async_dirty(fun mnesia:foldl/3, [Fun, [], ?TAB]).
+
+-spec(match_delete_messages2(binary()) -> integer()).
+match_delete_messages2(Filter) ->
+    MatchExpression = match_expression(Filter, topic),
+    mnesia:transaction(
+        fun() ->
+            Topics = mnesia:select(?TAB, MatchExpression),
+            lists:foldl(fun(Topic, C) ->
+                            mnesia:delete({?TAB, Topic}),
+                            C + 1
+                        end, 0, Topics)
+        end).
+
+-define(KEEP_TAG, <<"a">>).
+random_words(1, Acc) ->
+    [<<"channel">>|Acc];
+random_words(2, Acc) ->
+    I = integer_to_binary(rand:uniform(10)),
+    random_words(1, [<<"room_type_", I/binary>>|Acc]);
+random_words(3, Acc) ->
+    I = integer_to_binary(rand:uniform(10000)),
+    random_words(2, [<<"room_id_", I/binary>>|Acc]);
+random_words(4, Acc) ->
+    I = integer_to_binary(rand:uniform(100)),
+    random_words(3, [<<"measure_", I/binary>>|Acc]);
+%%random_words(5, Acc) ->
+%%    I = integer_to_binary(rand:uniform(20)),
+%%    random_words(4, [<<?KEEP_TAG/binary, I/binary>>|Acc]);
+%%random_words(6, Acc) ->
+%%    I = integer_to_binary(rand:uniform(40)),
+%%    random_words(5, [<<?KEEP_TAG/binary, I/binary>>|Acc]);
+%%random_words(7, Acc) ->
+%%    I = integer_to_binary(rand:uniform(80)),
+%%    random_words(6, [<<?KEEP_TAG/binary, I/binary>>|Acc]);
+%%random_words(8, Acc) ->
+%%    I = integer_to_binary(rand:uniform(160)),
+%%    random_words(7, [<<?KEEP_TAG/binary, I/binary>>|Acc]);
+%%random_words(9, Acc) ->
+%%    I = integer_to_binary(rand:uniform(100000)),
+%%    random_words(8, [<<?KEEP_TAG/binary, I/binary>>|Acc]);
+random_words(_, Acc) ->
+    random_words(4, Acc).
+
+random_and_write(N) ->
+    random_and_write(N, 0, 0).
+
+random_and_write(N, Acc, Bcc) ->
+    Level = 4,
+    Words = random_words(Level, []),
+    Topic = emqx_topic:join(Words),
+    WordsTuple = list_to_tuple(Words),
+    Msg = emqx_message:make(Topic, generate_random_binary(rand:uniform(20000) + 1000)),
+    {T, _} = timer:tc(fun() ->
+        mnesia:dirty_write(?TAB, #retained{topic = Topic, msg = Msg, expiry_time = 0, words = WordsTuple, level = size(WordsTuple)})
+        end),
+    case ets:info(?TAB, size) of
+        N ->
+            ?LOG(error, "dirty_write retainer create, time: ~w, random: ~w~n", [Bcc + T, Acc + 1]),
+            ok;
+        _ ->
+            random_and_write(N, Acc + 1, Bcc + T)
+    end.
+
+write_to_trie('$end_of_table', Acc) ->
+    Acc;
+write_to_trie(Key, Acc) ->
+    [#retained{topic = Topic, msg = Msg, expiry_time = ExpiryTime}] = ets:lookup(?TAB, Key),
+    mnesia:async_dirty(fun() -> emqx_retainer_trie:insert(Topic, Msg, ExpiryTime) end),
+    write_to_trie(ets:next(?TAB, Key), Acc + 1).
+
+write_to_retainer('$end_of_table', Acc) ->
+    Acc;
+write_to_retainer(Key, Acc) ->
+    [Retained] = ets:lookup(?TAB, Key),
+    mnesia:dirty_write(?TAB, Retained),
+    write_to_retainer(ets:next(?TAB, Key), Acc + 1).
+
+prepare_test(N) ->
+    rand:seed(exsplus),
+    mnesia:clear_table(?TAB),
+    mnesia:clear_table(emqx_retainer_trie_node),
+    mnesia:clear_table(emqx_retainer_trie_edge),
+    random_and_write(N),
+    {T1, C1} = timer:tc(fun() -> write_to_retainer(ets:first(?TAB), 0) end),
+    {T2, C2} = timer:tc(fun() -> write_to_trie(ets:first(?TAB), 0) end),
+    {T3, C3} = timer:tc(fun() -> write_to_trie(ets:first(?TAB), 0) end),
+    ?LOG(error, "dirty_write retainer update, time: ~w, count: ~w~n", [T1, C1]),
+    ?LOG(error, "dirty_write trie create, time: ~w, count: ~w~n", [T2, C2]),
+    ?LOG(error, "dirty_write trie update, time: ~w, count: ~w~n", [T3, C3]).
+
+test_match() ->
+    Topic = ets:first(?TAB),
+    Words = emqx_topic:words(Topic),
+    {Words1, _} = lists:foldr(fun
+                             (_, {Acc, 1}) -> {['#'|Acc], 2};
+                             (W, {Acc, N}) -> {[W|Acc], N + 1}
+                         end, {[], 1}, Words),
+    {Words2, _} = lists:foldr(fun
+                             (_, {Acc, 2}) -> {['+'|Acc], 3};
+                             (_, {Acc, 3}) -> {['+'|Acc], 4};
+                             (W, {Acc, N}) -> {[W|Acc], N + 1}
+                         end, {[], 1}, Words),
+    Topic1 = emqx_topic:join(Words1),
+    Topic2 = emqx_topic:join(Words2),
+    Topic3 = <<"#">>,
+    Topic4 = <<"+">>,
+    Topic5 = <<"+/+">>,
+    Topic6 = <<"$SYS/#">>,
+    {Words7, _} = lists:foldr(fun
+                             (_, {Acc, 1}) -> {Acc, 2};
+                             (_, {Acc, 2}) -> {['#'|Acc], 3};
+                             (W, {Acc, N}) -> {[W|Acc], N + 1}
+                         end, {[], 1}, Words),
+    Topic7 = emqx_topic:join(Words7),
+    {Words8, _} = lists:foldr(fun
+                                  (_, {Acc, 1}) -> {Acc, 2};
+                                  (_, {Acc, 2}) -> {Acc, 3};
+                                  (_, {Acc, 3}) -> {['#'|Acc], 4};
+                                  (W, {Acc, N}) -> {[W|Acc], N + 1}
+                              end, {[], 1}, Words),
+    Topic8 = emqx_topic:join(Words8),
+%%    test_match(Topic),
+    test_match(Topic1),
+    test_match(Topic2),
+    test_match(Topic7),
+    test_match(Topic8),
+    test_match(Topic3),
+    test_match(Topic4),
+    test_match(Topic5),
+    test_match(Topic6),
+    ok.
+test_match(Filter) ->
+    {T1, L1} = timer:tc(fun() -> length(match_messages(Filter)) end),
+    {T2, L2} = timer:tc(fun() -> length(match_messages_select(Filter)) end),
+    {T3, L3} = timer:tc(fun() -> length(match_messages_trie(Filter)) end),
+    ?LOG(error, "---- ~p ----~n", [Filter]),
+    ?LOG(error, "foldl matching, time: ~w, topics: ~w~n", [T1, L1]),
+    ?LOG(error, "select matching, time: ~w, topics: ~w~n", [T2, L2]),
+    ?LOG(error, "trie matching, time: ~w, topics: ~w~n", [T3, L3]),
+    ?LOG(error, "~n~n").
+
+test_delete() ->
+    Keys = mnesia:dirty_all_keys(?TAB),
+    {T, _} = timer:tc(fun() -> mnesia:transaction(fun() -> [mnesia:delete(?TAB, K, write) || K<-Keys] end) end),
+    ?LOG(error, "delete with transaction, time: ~w~n", [T]).
+
+
+generate_random_binary(N) ->
+    % The min packet length is 2
+    Len = rand:uniform(N) + 1,
+    gen_next(Len, <<>>).
+
+gen_next(0, Acc) ->
+    Acc;
+gen_next(N, Acc) ->
+    Byte = rand:uniform(256) - 1,
+    gen_next(N-1, <<Acc/binary, Byte:8>>).

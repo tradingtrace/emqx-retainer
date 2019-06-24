@@ -14,5 +14,18 @@
 
 -define(APP, emqx_retainer).
 -define(TAB, ?APP).
--record(retained, {topic, msg, expiry_time}).
+-record(retained, {topic, msg, expiry_time, words, level}).
+
+-type(retainer_trie_node_id() :: binary() | atom()).
+-record(retainer_trie_node, {
+          node_id          :: retainer_trie_node_id(),
+          edge_count = 0   :: non_neg_integer(),
+          msg              :: emqx_types:message(),
+          expiry_time = 0  :: non_neg_integer()
+        }).
+
+-record(retainer_trie_edge, {
+          parent_id   :: retainer_trie_node_id(),
+          child_id    :: retainer_trie_node_id()
+        }).
 
