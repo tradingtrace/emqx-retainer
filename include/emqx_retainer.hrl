@@ -14,7 +14,7 @@
 
 -define(APP, emqx_retainer).
 -define(TAB, ?APP).
--record(retained, {topic, msg, expiry_time, words, level}).
+-record(retained, {topic, msg, expiry_time, words, level, dollar}).
 
 -type(retainer_trie_node_id() :: binary() | atom()).
 -record(retainer_trie_node, {

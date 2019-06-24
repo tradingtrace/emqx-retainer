@@ -87,7 +87,7 @@ on_message_publish(Msg = #message{flags   = #{retain := true},
 
 on_message_publish(Msg = #message{flags = #{retain := true}}, Env) ->
     Msg1 = emqx_message:set_header(retained, true, Msg),
-    store_retained(Msg1, Env),
+    store_retained2(Msg1, Env),
     {ok, Msg};
 on_message_publish(Msg, _Env) ->
     {ok, Msg}.
@@ -358,9 +358,11 @@ store_retained2(Msg = #message{topic = Topic, payload = Payload, timestamp = Ts}
                         Interval -> emqx_time:now_ms(Ts) + Interval
                     end
             end,
-            Words = list_to_tuple(emqx_topic:words(Topic)),
+            [FirstWord|_] = Words = emqx_topic:words(Topic),
+            Dollar = not (emqx_topic:match(FirstWord, <<"#">>) andalso emqx_topic:match(FirstWord, <<"+">>)),
             mnesia:dirty_write(?TAB, #retained{topic = Topic, msg = Msg, expiry_time = ExpiryTime,
-                                               words = Words, level = erlang:size(Words)});
+                                               words = list_to_tuple(Words), level = erlang:length(Words),
+                                               dollar = Dollar});
         {true, _} ->
             ?LOG(error, "[Retainer] Cannot retain message(topic=~s) for table is full!", [Topic]);
         {_, true}->
@@ -375,8 +377,8 @@ match_messages_select(Filter) ->
 
 -spec(match_expression(binary(), message | topic) -> [tuple()]).
 match_expression(Filter, Result) ->
-    MatchHead = #retained{topic = '$1', msg = '$2', expiry_time = '$3', words = '$4', level = '$5'},
-    Words = emqx_topic:words(Filter),
+    MatchHead = #retained{topic = '$1', msg = '$2', expiry_time = '$3', words = '$4', level = '$5', dollar = '$6'},
+    [FirstWord|_] = Words = emqx_topic:words(Filter),
     Level = erlang:length(Words),
     ExpiryConditions = [{'orelse', {'>=', '$3', emqx_time:now_ms()}, {'=:=', '$3', 0}}],
     {WordsConditions, _} = lists:foldl(fun
@@ -385,12 +387,16 @@ match_expression(Filter, Result) ->
                                            (W, {WCs, N})  ->
                                                {[{'=:=', W, {element, N, '$4'}}|WCs], N+1}
                                        end, {[], 1}, Words),
-    SysConditions = [{'=/=', <<"$SYS">>, {element, 1, '$4'}}],
     LevelConditions = case lists:last(Words) of
                           '#' -> [{'>=', '$5', Level - 1}];
                           _ -> [{'=:=', '$5', Level}]
                       end,
-    MatchConditions = lists:flatten([LevelConditions, ExpiryConditions, SysConditions, WordsConditions]),
+    DollarConditions = case FirstWord of
+                           '#' -> [{'=:=', '$6', false}];
+                           '+' -> [{'=:=', '$6', false}];
+                           _ -> []
+                       end,
+    MatchConditions = lists:flatten([LevelConditions, ExpiryConditions, DollarConditions, WordsConditions]),
     MatchBody = case Result of
                     message -> ['$2'];
                     _ -> ['$1']
@@ -461,12 +467,14 @@ random_and_write(N) ->
 
 random_and_write(N, Acc, Bcc) ->
     Level = 4,
-    Words = random_words(Level, []),
+    [FirstWord|_] = Words = random_words(Level, []),
     Topic = emqx_topic:join(Words),
     WordsTuple = list_to_tuple(Words),
     Msg = emqx_message:make(Topic, generate_random_binary(rand:uniform(20000) + 1000)),
+    Dollar = not (emqx_topic:match(FirstWord, <<"#">>) andalso emqx_topic:match(FirstWord, <<"+">>)),
     {T, _} = timer:tc(fun() ->
-        mnesia:dirty_write(?TAB, #retained{topic = Topic, msg = Msg, expiry_time = 0, words = WordsTuple, level = size(WordsTuple)})
+        mnesia:dirty_write(?TAB, #retained{topic = Topic, msg = Msg, expiry_time = 0,
+                                           words = WordsTuple, level = size(WordsTuple), dollar = Dollar})
         end),
     case ets:info(?TAB, size) of
         N ->
